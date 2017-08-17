@@ -404,6 +404,7 @@ Copyright (C) 1998-2010 by James S. Seymour, Release 1.1.5
 use strict;
 use locale;
 use Getopt::Long;
+use JSON;
 eval { require Date::Calc };
 my $hasDateCalc = $@ ? 0 : 1;
 
@@ -463,7 +464,7 @@ my (
     $msgsRcvd, $msgsDlvrd, $sizeRcvd, $sizeDlvrd,
     $msgMonStr, $msgMon, $msgDay, $msgTimeStr, $msgHr, $msgMin, $msgSec,
     $msgYr,
-    $revMsgDateStr, $dayCnt, %msgsPerDay,
+    $revMsgDateStr, $dayCnt, $hourCnt, %msgsPerDay,
     %rejects, $msgsRjctd,
     %warns, $msgsWrnd,
     %discards, $msgsDscrdd,
@@ -475,6 +476,7 @@ my (
     %requeue
 );
 $dayCnt = $smtpdConnCnt = $smtpdTotTime = 0;
+$hourCnt = 1;
 
 # Init total messages delivered, rejected, and discarded
 $msgsDlvrd = $msgsRjctd = $msgsDscrdd = 0;
@@ -499,7 +501,7 @@ $usageMsg =
     "usage: $progName -[eq] [-d <today|yesterday>] [--detail <cnt>]
 	[--bounce-detail <cnt>] [--deferral-detail <cnt>]
 	[-h <cnt>] [-i|--ignore-case] [--iso-date-time] [--mailq]
-	[-m|--uucp-mung] [--no-no-msg-size] [--problems-first]
+	[-m|--uucp-mung] [--no-no-msg-size] [--problems-first] [--no-hour-distribution]
 	[--rej-add-from] [--reject-detail <cnt>] [--smtp-detail <cnt>]
 	[--smtpd-stats] [--smtpd-warning-detail <cnt>]
 	[--syslog-name=string] [-u <cnt>] [--verbose-msg-detail]
@@ -534,6 +536,7 @@ GetOptions(
     "no-no-msg-size"           => \$opts{'noNoMsgSize'},
     "no-reject-detail"         => \$opts{'noRejectDetail'},
     "no-smtpd-warnings"        => \$opts{'noSMTPDWarnings'},
+	"no-hour-distribution"     => \$opts{'noHourDistribution'},
     "problems-first"           => \$opts{'pf'},
     "q"                        => \$opts{'q'},
     "rej-add-from"             => \$opts{'rejAddFrom'},
@@ -575,6 +578,9 @@ if(defined($opts{'noRejectDetail'})) {
 if(defined($opts{'noSMTPDWarnings'})) {
     $opts{'smtpdWarnDetail'} = 0;
     warn "$progName: \"no_smtpd_warnings\" is deprecated, use \"smtpd-warning-detail=0\" instead\n"
+}
+if(defined($opts{'noHourDistribution'})) {
+	$hourCnt = 0;
 }
 
 # If --detail was specified, set anything that's not enumerated to it
@@ -964,6 +970,53 @@ if(defined($dateStr)) {
     print "Postfix log summaries for $dateStr\n";
 }
 
+my $outformat = 1;
+
+if ($outformat)
+{
+	my %outcome = ();
+
+	# grand totals
+    my %grand_totals = ( 'received' => sprintf("%d", adj_int_units($msgsRcvd)),
+                     'delivered' => sprintf("%d", adj_int_units($msgsDlvrd)),
+                     'forwarded' => sprintf("%d", adj_int_units($msgsFwdd)),
+                     'deferred' => sprintf("%d", adj_int_units($msgsDfrd)),
+                     'bounced' => sprintf("%d", adj_int_units($msgsBncd)),
+                     'rejected' => sprintf("%d", adj_int_units($msgsRjctd)),
+                     'reject warnings' => sprintf("%d", adj_int_units($msgsWrnd)),
+                     'held' => sprintf("%d", adj_int_units($msgsHld)),
+                     'discarded' => sprintf("%d", adj_int_units($msgsDscrdd)),
+                     'bytes received' => sprintf("%d", adj_int_units($sizeRcvd)),
+                     'bytes delivered' => sprintf("%d", adj_int_units($sizeDlvrd)),
+                     'senders' => sprintf("%d", adj_int_units($sendgUserCnt)),
+                     'sending hosts/domains' => sprintf ("%d", adj_int_units($sendgDomCnt)),
+                     'recipients' => sprintf("%d", adj_int_units($recipUserCnt)),
+                     'recipient hosts/domains' => sprintf("%d", adj_int_units($recipDomCnt))
+    );
+    $grand_totals{'deferrals'} = sprintf("%d", adj_int_units($msgsDfrdCnt)) if ($msgsDfrdCnt);
+	
+	# smtp
+	if (defined($opts{'smtpdStats'})) {
+    	my ($sec, $min, $hr) = get_smh($smtpdTotTime);
+		
+		my %smtpd = ( 'connections' => sprintf("%d", adj_int_units($smtpdConnCnt)),
+		              'hosts/domains' => sprintf("%d", adj_int_units(int(keys %smtpdPerDom))),
+					  'avg. connect time (seconds)' => sprintf("%d", $smtpdConnCnt > 0 ? ($smtpdTotTime / $smtpdConnCnt) + .5 : 0),
+					  'total connect time' => sprintf("%2d:%02d:%02d", $hr, $min, $sec)
+		);
+		$outcome{'smtpd'} = \%smtpd;
+	}
+	
+	# todo lots of reports missing
+	
+	# combine total output
+    $outcome{'grand totals'} = \%grand_totals;
+    my $json = JSON->new->allow_nonref;
+    my $json_pretty = $json->pretty->encode(\%outcome);
+    print $json_pretty . "\n";
+}
+else
+{
 print_subsect_title("Grand Totals");
 print "messages\n\n";
 printf " %6d%s  received\n", adj_int_units($msgsRcvd);
@@ -990,11 +1043,10 @@ if(defined($opts{'smtpdStats'})) {
     printf "  %6d%s  connections\n", adj_int_units($smtpdConnCnt);
     printf "  %6d%s  hosts/domains\n", adj_int_units(int(keys %smtpdPerDom));
     printf "  %6d   avg. connect time (seconds)\n",
-	$smtpdConnCnt > 0? ($smtpdTotTime / $smtpdConnCnt) + .5 : 0;
+	$smtpdConnCnt > 0 ? ($smtpdTotTime / $smtpdConnCnt) + .5 : 0;
     {
-	my ($sec, $min, $hr) = get_smh($smtpdTotTime);
-	printf " %2d:%02d:%02d  total connect time\n",
-	  $hr, $min, $sec;
+    	my ($sec, $min, $hr) = get_smh($smtpdTotTime);
+	    printf " %2d:%02d:%02d  total connect time\n", $hr, $min, $sec;
     }
 }
 
@@ -1003,8 +1055,7 @@ print "\n";
 print_problems_reports() if(defined($opts{'pf'}));
 
 print_per_day_summary(\%msgsPerDay) if($dayCnt > 1);
-print_per_hour_summary(\@rcvPerHr, \@dlvPerHr, \@dfrPerHr, \@bncPerHr,
-    \@rejPerHr, $dayCnt);
+print_per_hour_summary(\@rcvPerHr, \@dlvPerHr, \@dfrPerHr, \@bncPerHr, \@rejPerHr, $dayCnt) if ($hourCnt > 0);
 
 print_recip_domain_summary(\%recipDom, $opts{'h'});
 print_sending_domain_summary(\%sendgDom, $opts{'h'});
@@ -1025,6 +1076,7 @@ print_hash_by_key(\%noMsgSize, "Messages with no size data", 0, 1);
 print_problems_reports() unless(defined($opts{'pf'}));
 
 print_detailed_msg_data(\%msgDetail, "Message detail", $opts{'q'}) if($opts{'e'});
+}
 
 # Print "problems" reports
 sub print_problems_reports {

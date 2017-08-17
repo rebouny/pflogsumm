@@ -1,5 +1,10 @@
+Project cloned because I need some kind of unformatted output for further processing.
+And only global information, so json output will do it.
 
-Pflogsumm README
+typical usage: pflogsumm.pl --detail 0 --no-hour-distribution -q <mail.log>
+
+
+Pflogsumm original README
 
 There's not much to installing pflogsumm, so it's all manual.
 
@@ -39,3 +44,5 @@ That's about it.
 As the manpage and FAQ both note: pflogsumm requires the Date::Calc
 Perl module if you want to use --smtpd_stats.
 
+Project forked to add some csv export functionality of global findings for
+quick and easy further processing. 
